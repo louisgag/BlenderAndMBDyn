@@ -68,11 +68,12 @@ klass_list.append((Sandbox, SandboxOperator))
 
 class CollisionWorld(Entity):
     file_ext = "usr"
-    labels = "F_x F_X F_Y F_Z dL unit_X unit_Y unit_Z dL_dt".split()
+    labels = "F M F_X F_Y F_Z M_X M_Y M_Z".split()
     def write(self, f):
         f.write("\tuser defined: " + self.safe_name() + ", collision world, " + str(len(self.first)))
         for i, x in enumerate(self.first):
             f.write(",\n\t\t" + ", ".join([x.safe_name(), self.second[i].safe_name(), "reference, " + self.constitutive[i].safe_name()]))
+            f.write((",\n\t\tfriction function, \"" + self.function[i].name + "\", " + BPY.FORMAT(self.penetration[i])) if self.function[i] else "")
         f.write(";\n")
 
 class CollisionWorldOperator:
@@ -82,6 +83,8 @@ class CollisionWorldOperator:
     first = bpy.props.CollectionProperty(type=BPY.Element)
     second = bpy.props.CollectionProperty(type=BPY.Element)
     constitutive = bpy.props.CollectionProperty(type=BPY.Constitutive)
+    penetration = bpy.props.CollectionProperty(type=BPY.Float)
+    function = bpy.props.CollectionProperty(type=BPY.Function)
     N_pairs = bpy.props.IntProperty(min=1, max=50, name="Collision pairs", default=1)
     @classmethod
     def poll(cls, context):
@@ -98,6 +101,9 @@ class CollisionWorldOperator:
             c = self.constitutive.add()
             c.mandatory = True
             c.dimension = "1D"
+            p = self.penetration.add()
+            p.mandatory = True
+            self.function.add()
     def assign(self, context):
         super().assign(context)
         self.N_pairs = len(self.entity.first)
@@ -107,10 +113,17 @@ class CollisionWorldOperator:
             self.second[i].assign(value)
         for i, value in enumerate(self.entity.constitutive):
             self.constitutive[i].assign(value)
+        if hasattr(self.entity, "penetration"):
+            for i, value in enumerate(self.entity.penetration):
+                self.penetration[i].assign(value)
+        for i, value in enumerate(self.entity.function):
+            self.function[i].assign(value)
     def store(self, context):
         self.entity.first = [x.store() for x in self.first][:self.N_pairs]
         self.entity.second = [x.store() for x in self.second][:self.N_pairs]
         self.entity.constitutive = [x.store() for x in self.constitutive][:self.N_pairs]
+        self.entity.penetration = [x.store() for x in self.penetration][:self.N_pairs]
+        self.entity.function = [x.store() for x in self.function][:self.N_pairs]
         self.entity.objects = [e.objects[0] for e in self.entity.first + self.entity.second]
         self.entity.labels = list()
         for i in range(self.N_pairs):
@@ -126,8 +139,11 @@ class CollisionWorldOperator:
             self.first[i].draw(layout, "")
             self.second[i].draw(layout, "")
             self.constitutive[i].draw(layout, "")
+            self.function[i].draw(layout, "Friction")
+            if self.function[i].select:
+                self.penetration[i].draw(layout, "Penetration ratio")
     def check(self, context):
-        return (self.basis != self.N_pairs) or True in [(True in [x.check(context) for x in X]) for X in [self.first, self.second, self.constitutive]]
+        return (self.basis != self.N_pairs) or True in [(True in [x.check(context) for x in X]) for X in [self.first, self.second, self.constitutive, self.penetration, self.function]]
     def create_entity(self):
         return CollisionWorld(self.name)
 
@@ -136,8 +152,7 @@ klass_list.append((CollisionWorld, CollisionWorldOperator))
 class CollisionObject(Entity):
     group = "Collision object"
     def write(self, f):
-        f.write(
-        "\tuser defined: " + self.safe_name() + ", collision object")
+        f.write("\tuser defined: " + self.safe_name() + ", collision object, " + BPY.FORMAT(self.material))
         self.write_node(f, 0, node=True, position=True, orientation=True)
 
 class Box(CollisionObject):
@@ -154,13 +169,25 @@ class Box(CollisionObject):
         bm.free()
 
 class Collision:
+    material = bpy.props.PointerProperty(type = BPY.Str)
     @classmethod
     def poll(cls, context):
         return super().poll(context) and "libmodule-collision" in [x.value_type for x in database.input_card.filter("Module load")]
+    def prereqs(self, context):
+        self.material.mandatory = True
+        self.material.is_card = True
+    def assign(self, context):
+        self.material.assign(self.entity.material)
     def store(self, context):
         super().store(context)
         self.entity.objects[0].parent = self.entity.objects[1]
         self.entity.objects[0].matrix_parent_inverse = self.entity.objects[1].matrix_basis.inverted()
+        self.entity.material = self.material.store()
+        self.entity.objects = self.sufficient_objects(context)
+    def draw(self, context):
+        self.material.draw(self.layout, "Material", "Set")
+    def check(self, context):
+        return self.material.check(context)
 
 class BoxOperator(Collision):
     bl_label = "Box"
@@ -173,6 +200,7 @@ class BoxOperator(Collision):
         self.y = self.entity.y
         self.z = self.entity.z
         self.margin = self.entity.margin
+        super().assign(context)
     def store(self, context):
         self.entity.x = self.x
         self.entity.y = self.y
@@ -186,6 +214,7 @@ class BoxOperator(Collision):
         layout.prop(self, "y")
         layout.prop(self, "z")
         layout.prop(self, "margin")
+        super().draw(context)
     def create_entity(self):
         return Box(self.name)
 
@@ -228,6 +257,7 @@ class CapsuleOperator(Collision):
         self.radius = self.entity.radius
         self.height = self.entity.height
         self.margin = self.entity.margin
+        super().assign(context)
     def store(self, context):
         self.entity.radius = self.radius
         self.entity.height = self.height
@@ -238,6 +268,7 @@ class CapsuleOperator(Collision):
         layout.prop(self, "radius")
         layout.prop(self, "height")
         layout.prop(self, "margin")
+        super().draw(context)
     def create_entity(self):
         return Capsule(self.name)
 
@@ -284,11 +315,13 @@ class SphereOperator(Collision):
     radius = bpy.props.FloatProperty(min=0.0, default=1.0, name="Radius")
     def assign(self, context):
         self.radius = self.entity.radius
+        super().assign(context)
     def store(self, context):
         self.entity.radius = self.radius
         super().store(context)
     def draw(self, context):
         self.layout.prop(self, "radius")
+        super().draw(context)
     def create_entity(self):
         return Sphere(self.name)
 
