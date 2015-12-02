@@ -33,6 +33,7 @@ else:
 from .base import bpy, BPY, root_dot, database, Operator, Entity, Bundle
 from .common import FORMAT
 from .menu import default_klasses, definition_tree
+import sys
 
 class Base(Operator):
     bl_label = "Definitions"
@@ -1152,10 +1153,12 @@ class JobControl(Entity):
                 ("element connection, " if self.element_connection else "") +
                 ("node connection, " if self.node_connection else ""))
             f.write(s[:-2] + ";\n")
-        if self.select_timeout is not None:
-            f.write("\tselect timeout: " + BPY.FORMAT(self.select_timeout) + ";\n")
-        else:
-            f.write("\tselect timeout: forever;\n")
+        self.platform = sys.platform
+        if self.platform != "win32": # disables writing socket info on windows which causes MBDyn crash
+            if self.select_timeout is not None:
+                f.write("\tselect timeout: " + BPY.FORMAT(self.select_timeout) + ";\n")
+            else:
+                f.write("\tselect timeout: forever;\n")
         f.write("\tdefault orientation: " + self.default_orientation + ";\n")
         f.write("\toutput meter: " + self.meter_drive.string() +
             ";\n\toutput precision: " + FORMAT(self.output_precision) + ";\n" +
